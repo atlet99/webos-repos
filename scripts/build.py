@@ -220,12 +220,84 @@ def read_package(path):
         return info, icon_bytes
 
 
+def verify_signature(path, app_id, output, pins):
+    signature = Path(str(path) + '.sig')
+    certificate = Path(str(path) + '.cert.pem')
+    if not signature.exists() and not certificate.exists() and app_id not in pins:
+        return None
+    if not signature.is_file() or not certificate.is_file():
+        raise ValueError('signed package requires ' + str(signature) + ' and ' + str(certificate))
+    key_dir = output / 'keys'
+    key_dir.mkdir(exist_ok=True)
+    public_path = key_dir / (app_id + '.pem')
+    try:
+        public_key = subprocess.check_output(['openssl', 'x509', '-in', str(certificate), '-pubkey', '-noout'], stderr=subprocess.PIPE)
+        subprocess.run(['openssl', 'x509', '-in', str(certificate), '-checkend', '0', '-noout'],
+                       check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        certificate_der = subprocess.check_output(['openssl', 'pkey', '-pubin', '-outform', 'DER'], input=public_key, stderr=subprocess.PIPE)
+        fingerprint = hashlib.sha256(certificate_der).hexdigest()
+        if app_id in pins and pins[app_id] != fingerprint:
+            raise ValueError('certificate does not match trusted key for ' + app_id)
+        subprocess.run(['openssl', 'rsa', '-pubin', '-noout'], input=public_key,
+                       check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        public_path.write_bytes(public_key)
+        subprocess.run(['openssl', 'dgst', '-sha256', '-verify', str(public_path), '-signature', str(signature), str(path)],
+                       check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    except subprocess.CalledProcessError as error:
+        raise ValueError('invalid certificate, key or RSA-SHA256 signature for ' + path.name) from error
+    if app_id not in pins:
+        if os.environ.get('CI'):
+            raise ValueError('unregistered signing key for ' + app_id + '; run make build locally and commit trusted-keys.json')
+        pins[app_id] = fingerprint
+    for source in (signature, certificate):
+        shutil.copyfile(source, output / 'packages' / source.name)
+    return {
+        'algorithm': 'rsa-pkcs1v15-sha256',
+        'signatureUrl': BASE_URL + '/packages/' + quote(signature.name, safe=''),
+        'certificateUrl': BASE_URL + '/packages/' + quote(certificate.name, safe=''),
+        'publicKeyUrl': BASE_URL + '/keys/' + quote(public_path.name, safe=''),
+        'publicKeySha256': fingerprint,
+    }
+
+
+def select_packages(paths):
+    from packaging.version import InvalidVersion, Version
+
+    selected = {}
+    obsolete = []
+    for path in paths:
+        info, icon = read_package(path)
+        app_id = info['id']
+        if app_id not in selected:
+            selected[app_id] = (path, info, icon)
+            continue
+        previous = selected[app_id]
+        try:
+            current_version = Version(info['version'])
+            previous_version = Version(previous[1]['version'])
+        except InvalidVersion as error:
+            raise ValueError('cannot compare versions for ' + app_id + '; remove the obsolete IPK manually') from error
+        if current_version == previous_version:
+            raise ValueError('multiple IPKs for ' + app_id + ' with the same version; remove the duplicate manually')
+        if current_version > previous_version:
+            obsolete.append(previous[0])
+            selected[app_id] = (path, info, icon)
+        else:
+            obsolete.append(path)
+    return list(selected.values()), obsolete
+
+
 def build(output):
     parsed = urlparse(BASE_URL)
     if parsed.scheme != 'https' or not parsed.netloc or parsed.query or parsed.fragment:
         raise ValueError('BASE_URL must be an HTTPS URL without query or fragment')
     overrides = json.loads((ROOT / 'packages.json').read_text(encoding='utf-8'))
     repositories = json.loads((ROOT / 'repositories.json').read_text(encoding='utf-8'))
+    pins_file = ROOT / 'trusted-keys.json'
+    pins = json.loads(pins_file.read_text(encoding='utf-8')) if pins_file.exists() else {}
+    if not isinstance(pins, dict) or any(not isinstance(key, str) or not isinstance(value, str) or
+                                         not re.fullmatch(r'[0-9a-f]{64}', value) for key, value in pins.items()):
+        raise ValueError('invalid trusted-keys.json')
     if not isinstance(repositories, list):
         raise ValueError('repositories.json must contain a list of URLs')
     packages = []
@@ -235,11 +307,9 @@ def build(output):
     (output / 'icons').mkdir()
     ipks = sorted((ROOT / 'packages').glob('*.ipk'))
     repo_url = repository_url() if ipks else None
-    for path in ipks:
-        info, icon = read_package(path)
+    selected, obsolete = select_packages(ipks)
+    for path, info, icon in selected:
         app_id = info['id']
-        if app_id in ids:
-            raise ValueError('multiple IPKs for ' + app_id + '; keep only the desired version')
         ids.add(app_id)
         metadata = overrides.get(app_id, {})
         sidecar = companion_file(path, info['version'], '.json')
@@ -259,6 +329,9 @@ def build(output):
             'ipkHash': {'sha256': digest}, 'ipkSha256sum': digest,
             'ipkSize': path.stat().st_size,
         }
+        signature_info = verify_signature(path, app_id, output, pins)
+        if signature_info:
+            manifest['detachedSignature'] = signature_info
         has_markdown = companion_file(path, info['version'], '.md').is_file()
         description = metadata.get('shortDescription', '' if has_markdown else info.get('description', ''))
         if description:
@@ -313,6 +386,7 @@ def build(output):
 <p><a href="apps.json">Каталог JSON</a> · <a href="SHA256SUMS">SHA-256</a></p></body></html>\n'''
     (output / 'index.html').write_text(page, encoding='utf-8')
     (output / '.nojekyll').touch()
+    return pins, obsolete
 
 
 def main():
@@ -320,11 +394,23 @@ def main():
     with tempfile.TemporaryDirectory(dir=ROOT) as temp:
         output = Path(temp) / 'site'
         output.mkdir()
-        build(output)
+        pins, obsolete = build(output)
+        pins_file = ROOT / 'trusted-keys.json'
+        if pins and (not pins_file.exists() or json.loads(pins_file.read_text(encoding='utf-8')) != pins):
+            temp_pins = Path(temp) / 'trusted-keys.json'
+            temp_pins.write_text(json.dumps(pins, ensure_ascii=False, indent=2, sort_keys=True) + '\n', encoding='utf-8')
+            os.replace(temp_pins, pins_file)
+            print('Updated trusted-keys.json; verify new fingerprints with their publishers and commit this file.')
         destination = ROOT / '_site'
         if destination.exists():
             shutil.rmtree(destination)
         shutil.move(str(output), str(destination))
+        for old in obsolete:
+            for suffix in ('', '.sig', '.cert.pem'):
+                stale = Path(str(old) + suffix)
+                if stale.exists():
+                    stale.unlink()
+                    print('Removed outdated ' + stale.name)
     print('Built _site/apps.json for ' + BASE_URL)
 
 
