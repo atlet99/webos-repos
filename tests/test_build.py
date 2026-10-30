@@ -12,6 +12,14 @@ from scripts import build
 
 
 class BuildTest(unittest.TestCase):
+    def test_repository_remote_formats(self):
+        for remote in ('git@github.com:owner/repo.git', 'https://github.com/owner/repo.git',
+                       'ssh://git@github.com/owner/repo.git'):
+            with self.subTest(remote=remote), patch.object(build.subprocess, 'run') as run:
+                run.return_value.returncode = 0
+                run.return_value.stdout = remote
+                self.assertEqual(build.repository_url(), 'https://github.com/owner/repo')
+
     def test_catalog_and_duplicate_id(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -30,12 +38,14 @@ class BuildTest(unittest.TestCase):
             subprocess.run(['ar', '-rc', str(ipk), str(data)], check=True)
             original = build.ROOT
             build.ROOT = root
+            repo_patch = patch.object(build, 'repository_url', return_value='https://github.com/example/repository')
+            repo_patch.start()
             try:
                 output = root / 'output'
                 output.mkdir()
                 with self.assertRaisesRegex(ValueError, r'create .*packages/app\.md'):
                     build.build(output)
-                (root / 'packages' / 'app.md').write_text('# Тест\n\n[Сайт](https://example.org) и **описание**', encoding='utf-8')
+                (root / 'packages' / 'app.md').write_text('# Тест\n\n[Сайт](https://example.org) и **описание**\n\nhttps://example.com/path.', encoding='utf-8')
                 (root / 'packages' / 'app.json').write_text('{"rootRequired": true}')
                 output = root / 'successful'
                 output.mkdir()
@@ -46,17 +56,35 @@ class BuildTest(unittest.TestCase):
                 self.assertTrue(manifest['rootRequired'])
                 self.assertEqual((output / 'icons' / 'org.example.app.png').read_bytes(), b'icon')
                 self.assertIn('&lt;App&gt;', (output / 'index.html').read_text())
-                self.assertEqual(entry['shortDescription'], 'Тест Сайт и описание')
+                self.assertEqual(entry['shortDescription'], 'Тест Сайт и описание https://example.com/path .')
                 self.assertTrue(entry['fullDescriptionUrl'].endswith('/descriptions/org.example.app.html'))
                 rendered = (output / 'descriptions' / 'org.example.app.html').read_text()
                 self.assertIn('<a href="https://example.org">Сайт</a>', rendered)
                 self.assertIn('<strong>описание</strong>', rendered)
-                (root / 'packages' / 'second.ipk').write_bytes(ipk.read_bytes())
+                self.assertIn('<a href="https://example.com/path">https://example.com/path</a>.', rendered)
+                self.assertIn('<a href="https://github.com/example/repository">Репозиторий приложений</a>', rendered)
+                self.assertEqual(manifest['sourceUrl'], 'https://github.com/example/repository')
+                versioned = root / 'packages' / 'app_1.0_all.ipk'
+                ipk.rename(versioned)
+                versioned_output = root / 'versioned'
+                versioned_output.mkdir()
+                build.build(versioned_output)
+                versioned_entry = json.loads((versioned_output / 'apps.json').read_text())['packages'][0]
+                self.assertTrue(versioned_entry['manifest']['ipkUrl'].endswith('/app_1.0_all.ipk'))
+                self.assertTrue(versioned_entry['manifest']['rootRequired'])
+                self.assertIn('<strong>описание</strong>', (versioned_output / 'descriptions' / 'org.example.app.html').read_text())
+                (root / 'packages' / 'app_1.0_all.md').write_text('Версионное описание')
+                specific_output = root / 'specific'
+                specific_output.mkdir()
+                build.build(specific_output)
+                self.assertIn('Версионное описание', (specific_output / 'descriptions' / 'org.example.app.html').read_text())
+                (root / 'packages' / 'second.ipk').write_bytes(versioned.read_bytes())
                 other = root / 'other'
                 other.mkdir()
                 with self.assertRaisesRegex(ValueError, 'multiple IPKs'):
                     build.build(other)
             finally:
+                repo_patch.stop()
                 build.ROOT = original
 
     def test_external_pages_relative_urls_and_duplicates(self):

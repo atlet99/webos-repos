@@ -14,11 +14,52 @@ import subprocess
 import sys
 import tarfile
 import tempfile
+import xml.etree.ElementTree as ET
 from urllib.parse import quote, urljoin, urlparse
 from urllib.request import Request, urlopen
 
 ROOT = Path(__file__).resolve().parent.parent
 BASE_URL = os.environ.get('BASE_URL', 'https://atlet99.github.io/webos-repos').rstrip('/')
+
+
+def repository_url():
+    result = subprocess.run(['git', 'remote', 'get-url', 'origin'], cwd=ROOT,
+                            capture_output=True, text=True, check=False)
+    remote = result.stdout.strip() if result.returncode == 0 else ''
+    scp = re.fullmatch(r'(?:[^@/\s]+@)?([^:/\s]+):([^\s]+)', remote)
+    if scp and '://' not in remote:
+        remote = 'https://' + scp.group(1) + '/' + scp.group(2)
+    parsed = urlparse(remote)
+    if parsed.scheme in ('https', 'ssh') and parsed.hostname and parsed.path and not re.search(r'\s', parsed.path):
+        path = parsed.path.rstrip('/')
+        if path.endswith('.git'):
+            path = path[:-4]
+        if path and parsed.hostname.lower() == 'github.com':
+            return 'https://github.com' + path
+    github = os.environ.get('GITHUB_REPOSITORY', '')
+    if re.fullmatch(r'[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+', github):
+        return 'https://github.com/' + github
+    raise ValueError('cannot determine GitHub repository URL from git remote origin')
+
+
+def render_markdown(text):
+    import markdown
+    from markdown.inlinepatterns import InlineProcessor
+
+    class BareLink(InlineProcessor):
+        ANCESTOR_EXCLUDES = ('a', 'code', 'pre')
+
+        def handleMatch(self, match, data):
+            url = match.group(0).rstrip('.,!?;:)]}')
+            if not url:
+                return None, None, None
+            link = ET.Element('a', {'href': url})
+            link.text = url
+            return link, match.start(0), match.start(0) + len(url)
+
+    renderer = markdown.Markdown(extensions=['sane_lists', 'fenced_code', 'tables'])
+    renderer.inlinePatterns.register(BareLink(r'https?://[^\s<>"\']+'), 'bare_link', 50)
+    return renderer.convert(text)
 
 
 class DescriptionText(HTMLParser):
@@ -30,15 +71,22 @@ class DescriptionText(HTMLParser):
         self.parts.append(data)
 
 
-def add_description(entry, output, ipk_path=None):
+def companion_file(ipk_path, version, suffix):
+    exact = ipk_path.with_suffix(suffix)
+    if exact.is_file():
+        return exact
+    match = re.fullmatch(r'(.+)_' + re.escape(version) + r'(?:_[^/]+)?', ipk_path.stem)
+    return ipk_path.with_name(match.group(1) + suffix) if match else exact
+
+
+def add_description(entry, output, ipk_path=None, repo_url=None):
     app_id = entry['id']
     if not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9._-]*', app_id):
         raise ValueError('invalid application id: ' + app_id)
-    markdown_path = ipk_path.with_suffix('.md') if ipk_path else None
+    markdown_path = companion_file(ipk_path, entry['manifest']['version'], '.md') if ipk_path else None
     path = ROOT / 'descriptions' / (app_id + '.html')
     if markdown_path and markdown_path.is_file():
-        import markdown
-        content = markdown.markdown(markdown_path.read_text(encoding='utf-8'), extensions=['sane_lists', 'fenced_code', 'tables'])
+        content = render_markdown(markdown_path.read_text(encoding='utf-8'))
         path = markdown_path
     elif path.exists():
         content = path.read_text(encoding='utf-8')
@@ -50,11 +98,6 @@ def add_description(entry, output, ipk_path=None):
         text = ' '.join(' '.join(parser.parts).split())
         if not text:
             raise ValueError('description file is empty: ' + str(path))
-        target = output / 'descriptions'
-        target.mkdir(exist_ok=True)
-        name = app_id + '.html'
-        (target / name).write_text(content, encoding='utf-8')
-        entry['fullDescriptionUrl'] = BASE_URL + '/descriptions/' + quote(name)
         if not entry.get('shortDescription'):
             entry['shortDescription'] = html.escape(text[:200])
     elif not entry.get('fullDescriptionUrl') and not entry.get('shortDescription'):
@@ -63,8 +106,18 @@ def add_description(entry, output, ipk_path=None):
             entry['shortDescription'] = html.escape(description.strip())
         else:
             if ipk_path:
-                raise ValueError('missing description for ' + ipk_path.name + '; create ' + str(ipk_path.with_suffix('.md')))
+                raise ValueError('missing description for ' + ipk_path.name + '; create ' + str(markdown_path))
             raise ValueError('missing description for ' + app_id + '; create descriptions/' + app_id + '.html')
+    if ipk_path:
+        if content is None:
+            content = '<p>' + html.escape(html.unescape(entry['shortDescription'])) + '</p>'
+        content += '\n<p><a href="' + html.escape(repo_url, quote=True) + '">Репозиторий приложений</a></p>'
+    if content is not None:
+        target = output / 'descriptions'
+        target.mkdir(exist_ok=True)
+        name = app_id + '.html'
+        (target / name).write_text(content, encoding='utf-8')
+        entry['fullDescriptionUrl'] = BASE_URL + '/descriptions/' + quote(name)
 
 
 def absolute_url(base, value):
@@ -180,14 +233,16 @@ def build(output):
     ids = set()
     (output / 'packages').mkdir(parents=True)
     (output / 'icons').mkdir()
-    for path in sorted((ROOT / 'packages').glob('*.ipk')):
+    ipks = sorted((ROOT / 'packages').glob('*.ipk'))
+    repo_url = repository_url() if ipks else None
+    for path in ipks:
         info, icon = read_package(path)
         app_id = info['id']
         if app_id in ids:
             raise ValueError('multiple IPKs for ' + app_id + '; keep only the desired version')
         ids.add(app_id)
         metadata = overrides.get(app_id, {})
-        sidecar = path.with_suffix('.json')
+        sidecar = companion_file(path, info['version'], '.json')
         if sidecar.exists():
             extra = json.loads(sidecar.read_text(encoding='utf-8'))
             if not isinstance(extra, dict):
@@ -210,6 +265,7 @@ def build(output):
         for key in ('sourceUrl',):
             if metadata.get(key):
                 manifest[key] = metadata[key]
+        manifest.setdefault('sourceUrl', repo_url)
         if icon is not None:
             suffix = Path(info['icon']).suffix.lower()
             if suffix not in ('.png', '.jpg', '.jpeg', '.webp'):
@@ -223,7 +279,7 @@ def build(output):
                  'manifest': manifest, 'pool': 'main', 'shortDescription': description}
         if icon is not None:
             entry['iconUri'] = manifest['iconUri']
-        add_description(entry, output, path)
+        add_description(entry, output, path, repo_url)
         packages.append(entry)
         shutil.copyfile(path, output / 'packages' / path.name)
         checksums.append(digest + '  packages/' + path.name)
