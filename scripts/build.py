@@ -3,11 +3,9 @@
 
 import hashlib
 import html
-from html.parser import HTMLParser
 import io
 import json
 import os
-from pathlib import Path
 import re
 import shutil
 import subprocess
@@ -15,6 +13,8 @@ import sys
 import tarfile
 import tempfile
 import xml.etree.ElementTree as ET
+from html.parser import HTMLParser
+from pathlib import Path
 from urllib.parse import quote, urljoin, urlparse
 from urllib.request import Request, urlopen
 
@@ -259,7 +259,8 @@ def build(output):
             'ipkHash': {'sha256': digest}, 'ipkSha256sum': digest,
             'ipkSize': path.stat().st_size,
         }
-        description = metadata.get('shortDescription', info.get('description', ''))
+        has_markdown = companion_file(path, info['version'], '.md').is_file()
+        description = metadata.get('shortDescription', '' if has_markdown else info.get('description', ''))
         if description:
             manifest['appDescription'] = description
         for key in ('sourceUrl',):
@@ -274,12 +275,14 @@ def build(output):
             (output / 'icons' / icon_name).write_bytes(icon)
             manifest['iconUri'] = BASE_URL + '/icons/' + quote(icon_name)
         manifest_name = app_id + '.manifest.json'
-        (output / manifest_name).write_text(json.dumps(manifest, ensure_ascii=False, indent=2) + '\n', encoding='utf-8')
         entry = {'id': app_id, 'title': info['title'], 'manifestUrl': BASE_URL + '/' + manifest_name,
                  'manifest': manifest, 'pool': 'main', 'shortDescription': description}
         if icon is not None:
             entry['iconUri'] = manifest['iconUri']
         add_description(entry, output, path, repo_url)
+        if has_markdown and not metadata.get('shortDescription'):
+            manifest['appDescription'] = html.unescape(entry['shortDescription'])
+        (output / manifest_name).write_text(json.dumps(manifest, ensure_ascii=False, indent=2) + '\n', encoding='utf-8')
         packages.append(entry)
         shutil.copyfile(path, output / 'packages' / path.name)
         checksums.append(digest + '  packages/' + path.name)

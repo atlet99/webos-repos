@@ -3,38 +3,58 @@ name: Deploy GitHub Pages
 on:
   push:
     branches: [main]
+  pull_request:
   schedule:
     - cron: '23 4 * * *'
   workflow_dispatch:
 
 permissions:
   contents: read
-  pages: write
-  id-token: write
-
-concurrency:
-  group: pages
-  cancel-in-progress: false
 
 jobs:
-  build:
+  lint-workflows:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/configure-pages@v5
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          persist-credentials: false
+      - name: Check workflow syntax
+        run: go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.12
+      - name: Audit workflow security
+        run: pipx run --spec zizmor==1.31.1 zizmor --offline .github/workflows
+  build:
+    runs-on: ubuntu-latest
+    needs: lint-workflows
+    permissions:
+      contents: read
+      pages: read
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          persist-credentials: false
+      - uses: actions/configure-pages@983d7736d9b0ae728b81ab479565c72886d7745b # v5.0.0
       - name: Test repository generator
         run: make test
+      - name: Lint Python
+        run: make python-lint
       - name: Build repository
         run: make build
-      - uses: actions/upload-pages-artifact@v3
+      - uses: actions/upload-pages-artifact@7b1f4a764d45c48632c6b24a0339c27f5614fb0b # v4.0.0
         with:
           path: _site
   deploy:
+    if: github.event_name != 'pull_request'
+    permissions:
+      pages: write
+      id-token: write
+    concurrency:
+      group: pages
+      cancel-in-progress: false
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
     runs-on: ubuntu-latest
     needs: build
     steps:
-      - uses: actions/deploy-pages@v5
+      - uses: actions/deploy-pages@368f82528645a54fb793d4d04e342629a3f51346 # v5.0.1
         id: deployment

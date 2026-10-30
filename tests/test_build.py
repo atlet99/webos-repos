@@ -1,11 +1,11 @@
 import hashlib
 import io
 import json
-from pathlib import Path
 import subprocess
 import tarfile
 import tempfile
 import unittest
+from pathlib import Path
 from unittest.mock import patch
 
 from scripts import build
@@ -28,7 +28,7 @@ class BuildTest(unittest.TestCase):
             (root / 'packages.json').write_text('{}')
             (root / 'repositories.json').write_text('[]')
             data = root / 'data.tar.gz'
-            info = json.dumps({'id': 'org.example.app', 'version': '1.0', 'title': '<App>', 'icon': 'icon.png'}).encode()
+            info = json.dumps({'id': 'org.example.app', 'version': '1.0', 'title': '<App>', 'icon': 'icon.png', 'description': 'Old description'}).encode()
             with tarfile.open(data, 'w:gz') as tar:
                 for name, content in [('appinfo.json', info), ('icon.png', b'icon')]:
                     member = tarfile.TarInfo('usr/palm/applications/org.example.app/' + name)
@@ -43,8 +43,7 @@ class BuildTest(unittest.TestCase):
             try:
                 output = root / 'output'
                 output.mkdir()
-                with self.assertRaisesRegex(ValueError, r'create .*packages/app\.md'):
-                    build.build(output)
+                build.build(output)
                 (root / 'packages' / 'app.md').write_text('# Тест\n\n[Сайт](https://example.org) и **описание**\n\nhttps://example.com/path.', encoding='utf-8')
                 (root / 'packages' / 'app.json').write_text('{"rootRequired": true}')
                 output = root / 'successful'
@@ -57,6 +56,8 @@ class BuildTest(unittest.TestCase):
                 self.assertEqual((output / 'icons' / 'org.example.app.png').read_bytes(), b'icon')
                 self.assertIn('&lt;App&gt;', (output / 'index.html').read_text())
                 self.assertEqual(entry['shortDescription'], 'Тест Сайт и описание https://example.com/path .')
+                self.assertEqual(manifest['appDescription'], entry['shortDescription'])
+                self.assertEqual(json.loads((output / 'org.example.app.manifest.json').read_text())['appDescription'], entry['shortDescription'])
                 self.assertTrue(entry['fullDescriptionUrl'].endswith('/descriptions/org.example.app.html'))
                 rendered = (output / 'descriptions' / 'org.example.app.html').read_text()
                 self.assertIn('<a href="https://example.org">Сайт</a>', rendered)

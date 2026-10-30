@@ -4,7 +4,7 @@ PYTHON ?= python3
 VENV := .venv
 VENV_PYTHON := $(VENV)/bin/python
 
-.PHONY: all build check clean help lint test
+.PHONY: all build check clean freeze help lint python-lint test
 
 all: build ## Собрать каталог.
 
@@ -22,7 +22,14 @@ test: $(VENV)/.ready ## Запустить тесты генератора.
 lint: ## Проверить Makefile с помощью checkmake.
 	checkmake --config checkmake.ini Makefile
 
-check: test lint ## Запустить тесты и проверить Makefile.
+python-lint: $(VENV)/.ready ## Проверить Python-код с помощью Ruff.
+	$(VENV)/bin/ruff check scripts tests
+
+check: test lint python-lint ## Запустить тесты и проверки кода.
+
+freeze: ## Зафиксировать версии прямых зависимостей из .venv.
+	@if [ ! -x $(VENV_PYTHON) ]; then $(MAKE) $(VENV)/.ready; fi
+	$(VENV_PYTHON) scripts/freeze.py $(PACKAGES)
 
 clean: ## Удалить результат сборки.
 	rm -rf -- _site
