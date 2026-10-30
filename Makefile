@@ -13,7 +13,7 @@ test: ## Запустить тесты генератора.
 	$(PYTHON) -m unittest discover -s tests
 
 lint: ## Проверить Makefile с помощью checkmake.
-	checkmake Makefile
+	checkmake --config checkmake.ini Makefile
 
 check: test lint ## Запустить тесты и проверить Makefile.
 

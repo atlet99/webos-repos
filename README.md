@@ -20,7 +20,7 @@ https://atlet99.github.io/webos-repos/apps.json
 
 Сборка читает `appinfo.json` и значок из IPK, вычисляет SHA-256 и размер, затем создаёт страницу, `apps.json`, манифесты и `SHA256SUMS` в `_site/`. В `SHA256SUMS` входят только локальные IPK. Результат сборки в Git не добавляется. Для проверки выполните `make test`.
 
-`make` или `make help` показывает список команд из описаний в Makefile. `make check` запускает тесты и проверку Makefile через установленный `checkmake`; `make clean` удаляет результат сборки. Другой интерпретатор можно выбрать через `make build PYTHON=python3`.
+`make` или `make help` показывает список команд из описаний в Makefile. `make check` запускает тесты и проверку Makefile через установленный `checkmake` с настройками из `checkmake.ini`; `make clean` удаляет результат сборки. Другой интерпретатор можно выбрать через `make build PYTHON=python3`.
 
 ## Внешние репозитории
 
