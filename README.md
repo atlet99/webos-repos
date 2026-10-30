@@ -107,6 +107,7 @@ make build
 | `make test` | Запустить тесты генератора. |
 | `make lint` | Проверить Makefile через установленный `checkmake`. |
 | `make python-lint` | Проверить Python-код через Ruff из `.venv`. |
+| `make workflow-lint` | Проверить безопасность GitHub Actions через zizmor из `.venv`. |
 | `make check` | Выполнить тесты и `checkmake`. |
 | `make freeze` | Зафиксировать версии прямых зависимостей из `.venv`. |
 | `make clean` | Удалить результат сборки `_site/`. |
@@ -117,7 +118,7 @@ make build
 
 ```bash
 source .venv/bin/activate
-python -m pip install --upgrade Markdown ruff
+python -m pip install --upgrade Markdown ruff zizmor
 make freeze
 make check
 ```
@@ -127,6 +128,8 @@ make check
 ## Публикация и возможные ошибки
 
 При первоначальной настройке репозитория выберите **Settings → Pages → GitHub Actions**. Workflow **Deploy GitHub Pages** запускается после push в `main`, ежедневно и вручную через вкладку Actions. GitHub Pages получает собранный артефакт напрямую; ветка `gh-pages` не требуется.
+
+На push и pull request workflow проверяется через `actionlint` и `zizmor`, Python-код — через Ruff, затем запускаются тесты и сборка. Публикация выполняется только после успешных проверок; pull request не публикуется.
 
 Если сборка не прошла, проверьте сообщение в терминале или во вкладке Actions:
 

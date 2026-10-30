@@ -4,7 +4,7 @@ PYTHON ?= python3
 VENV := .venv
 VENV_PYTHON := $(VENV)/bin/python
 
-.PHONY: all build check clean freeze help lint python-lint test
+.PHONY: all build check clean freeze help lint python-lint test workflow-lint
 
 all: build ## Собрать каталог.
 
@@ -24,6 +24,9 @@ lint: ## Проверить Makefile с помощью checkmake.
 
 python-lint: $(VENV)/.ready ## Проверить Python-код с помощью Ruff.
 	$(VENV)/bin/ruff check scripts tests
+
+workflow-lint: $(VENV)/.ready ## Проверить безопасность GitHub Actions.
+	$(VENV)/bin/zizmor $(ZIZMOR_FLAGS) .github/workflows
 
 check: test lint python-lint ## Запустить тесты и проверки кода.
 
