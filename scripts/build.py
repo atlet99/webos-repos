@@ -185,12 +185,53 @@ def external_packages(url):
         url = absolute_url(url, paging['nextUrl']) if paging.get('nextUrl') else None
 
 
+def ipk_data(path):
+    # ponytail: IPK uses ar; parse GNU/BSD names directly because macOS ar cannot select GNU members.
+    archives = []
+    names = b''
+    with path.open('rb') as source:
+        if source.read(8) != b'!<arch>\n':
+            raise ValueError(str(path) + ': invalid IPK archive')
+        while header := source.read(60):
+            if len(header) != 60 or header[58:] != b'`\n':
+                raise ValueError(str(path) + ': invalid ar header')
+            try:
+                size = int(header[48:58])
+            except ValueError:
+                raise ValueError(str(path) + ': invalid ar member size') from None
+            if size < 0:
+                raise ValueError(str(path) + ': invalid ar member size')
+            raw_name = header[:16].decode('ascii').strip()
+            content = source.read(size)
+            if len(content) != size:
+                raise ValueError(str(path) + ': truncated ar member')
+            if size % 2 and len(source.read(1)) != 1:
+                raise ValueError(str(path) + ': missing ar padding')
+            if raw_name == '//':
+                names = content
+                continue
+            if raw_name.startswith('#1/'):
+                name_size = int(raw_name[3:])
+                if name_size > len(content):
+                    raise ValueError(str(path) + ': invalid ar member name')
+                name = content[:name_size].rstrip(b'\0').decode('utf-8')
+                content = content[name_size:]
+            elif re.fullmatch(r'/\d+', raw_name):
+                offset = int(raw_name[1:])
+                if offset >= len(names):
+                    raise ValueError(str(path) + ': invalid ar name offset')
+                name = names[offset:].split(b'\n', 1)[0].rstrip(b'/').decode('utf-8')
+            else:
+                name = raw_name.removesuffix('/')
+            if re.fullmatch(r'data\.tar(?:\.(?:gz|xz|bz2))?', name):
+                archives.append(content)
+    if len(archives) != 1:
+        raise ValueError(str(path) + ': expected one supported data.tar archive')
+    return archives[0]
+
+
 def read_package(path):
-    members = subprocess.check_output(['ar', '-t', str(path)], text=True).splitlines()
-    data = [name for name in members if re.fullmatch(r'data\.tar(?:\.(?:gz|xz|bz2))?', name)]
-    if len(data) != 1:
-        raise ValueError('expected one supported data.tar archive')
-    archive = subprocess.check_output(['ar', '-p', str(path), data[0]])
+    archive = ipk_data(path)
     with tarfile.open(fileobj=io.BytesIO(archive), mode='r:*') as tar:
         apps = [member for member in tar.getmembers()
                 if member.isfile() and re.fullmatch(r'(?:\./)?usr/palm/applications/[^/]+/appinfo\.json', member.name)]
@@ -277,8 +318,13 @@ def select_packages(paths):
             previous_version = Version(previous[1]['version'])
         except InvalidVersion as error:
             raise ValueError('cannot compare versions for ' + app_id + '; remove the obsolete IPK manually') from error
+        current_name = re.fullmatch(r'(.+)_' + re.escape(info['version']) + r'(?:_(.+))?', path.stem)
+        previous_name = re.fullmatch(r'(.+)_' + re.escape(previous[1]['version']) + r'(?:_(.+))?', previous[0].stem)
+        duplicate = 'multiple IPKs for ' + app_id + ': ' + previous[0].name + ' and ' + path.name
         if current_version == previous_version:
-            raise ValueError('multiple IPKs for ' + app_id + ' with the same version; remove the duplicate manually')
+            raise ValueError(duplicate + '; identical IDs and versions cannot both be published')
+        if not current_name or not previous_name or current_name.groups() != previous_name.groups():
+            raise ValueError(duplicate + '; cannot safely identify an older version, remove a variant manually')
         if current_version > previous_version:
             obsolete.append(previous[0])
             selected[app_id] = (path, info, icon)

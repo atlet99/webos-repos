@@ -8,6 +8,16 @@ from scripts import build
 
 
 class CleanupTest(unittest.TestCase):
+    def test_different_resolution_variants_are_not_removed(self):
+        paths = [Path('app_1.0_hd_all.ipk'), Path('app_2.0_fhd_all.ipk')]
+
+        def read_package(path):
+            return {'id': 'org.example.app', 'version': '1.0' if path == paths[0] else '2.0'}, None
+
+        with patch.object(build, 'read_package', side_effect=read_package):
+            with self.assertRaisesRegex(ValueError, 'cannot safely identify an older version'):
+                build.select_packages(paths)
+
     def test_old_versions_removed_only_after_success(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
