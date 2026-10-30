@@ -141,6 +141,35 @@ Homebrew Channel сам проверяет SHA-256 IPK, но не проверя
 
 Сборка объединяет все страницы подключённых каталогов с локальными приложениями. Внешние IPK не копируются: Homebrew Channel скачивает их по ссылке источника. Данные обновляются при сборке после push и раз в сутки по расписанию.
 
+Для обновления сразу после публикации внешний проект может отправить событие `repository_dispatch` с типом `external-catalog-updated`. Событие запускает наш workflow, который повторно загружает **все** внешние каталоги.
+
+Один из способов авторизации — приватный GitHub App с краткоживущим installation token:
+
+1. Создайте GitHub App в **Settings → Developer settings → GitHub Apps**. Для этого сценария webhook можно отключить.
+2. Выдайте приложению разрешение репозитория **Contents: Read and write** и установите его только на `webos-repos`.
+3. Создайте private key приложения. В репозитории-источнике добавьте Client ID как переменную Actions `CATALOG_APP_CLIENT_ID`, а содержимое PEM-файла — как секрет Actions `CATALOG_APP_PRIVATE_KEY`.
+4. Добавьте в workflow **источника** после успешной публикации его `apps.json`:
+
+```yaml
+- name: Создать токен GitHub App
+  id: catalog-token
+  uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+  with:
+    client-id: ${{ vars.CATALOG_APP_CLIENT_ID }}
+    private-key: ${{ secrets.CATALOG_APP_PRIVATE_KEY }}
+    owner: atlet99
+    repositories: webos-repos
+    permission-contents: write
+- name: Обновить объединённый каталог
+  env:
+    GH_TOKEN: ${{ steps.catalog-token.outputs.token }}
+  run: |
+    gh api --method POST repos/atlet99/webos-repos/dispatches \
+      -f event_type=external-catalog-updated
+```
+
+Это нужно настроить **в самом внешнем проекте**: наш репозиторий не может автоматически получать события от произвольного URL. Installation token создаётся для `webos-repos` на время job; отдельный постоянный PAT не нужен. Закрытый ключ приложения храните только в секрете Actions. Сообщение не содержит новые данные: сборщик по-прежнему получает их из `repositories.json`. Оставленное ежедневное расписание обновит каталог, если событие не пришло. Если каталог источника обновляется не этим workflow, событие нужно отправлять после фактической публикации Pages.
+
 Нужен каталог Homebrew Channel с массивом `packages` и корректными манифестами, включая `ipkHash.sha256`. Относительные ссылки преобразуются в абсолютные HTTPS-адреса. При совпадении ID между локальными и внешними пакетами или между внешними источниками сборка остановится; одинаковые названия при разных ID допустимы.
 
 Сборщик сохраняет дополнительные поля внешних манифестов, в том числе `signature` и `signatureAlg`, но **не проверяет внешние подписи и не скачивает внешние IPK для сверки хеша**. Homebrew Channel при установке сравнивает IPK с SHA-256 из каталога; это отдельная проверка от доверия к подписи.

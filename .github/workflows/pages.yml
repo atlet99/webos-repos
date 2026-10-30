@@ -6,6 +6,8 @@ on:
   pull_request:
   schedule:
     - cron: '23 4 * * *'
+  repository_dispatch:
+    types: [external-catalog-updated]
   workflow_dispatch:
 
 permissions:
