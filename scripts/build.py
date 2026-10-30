@@ -30,13 +30,21 @@ class DescriptionText(HTMLParser):
         self.parts.append(data)
 
 
-def add_description(entry, output):
+def add_description(entry, output, ipk_path=None):
     app_id = entry['id']
     if not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9._-]*', app_id):
         raise ValueError('invalid application id: ' + app_id)
+    markdown_path = ipk_path.with_suffix('.md') if ipk_path else None
     path = ROOT / 'descriptions' / (app_id + '.html')
-    if path.exists():
+    if markdown_path and markdown_path.is_file():
+        import markdown
+        content = markdown.markdown(markdown_path.read_text(encoding='utf-8'), extensions=['sane_lists', 'fenced_code', 'tables'])
+        path = markdown_path
+    elif path.exists():
         content = path.read_text(encoding='utf-8')
+    else:
+        content = None
+    if content is not None:
         parser = DescriptionText()
         parser.feed(content)
         text = ' '.join(' '.join(parser.parts).split())
@@ -44,8 +52,9 @@ def add_description(entry, output):
             raise ValueError('description file is empty: ' + str(path))
         target = output / 'descriptions'
         target.mkdir(exist_ok=True)
-        (target / path.name).write_text(content, encoding='utf-8')
-        entry['fullDescriptionUrl'] = BASE_URL + '/descriptions/' + quote(path.name)
+        name = app_id + '.html'
+        (target / name).write_text(content, encoding='utf-8')
+        entry['fullDescriptionUrl'] = BASE_URL + '/descriptions/' + quote(name)
         if not entry.get('shortDescription'):
             entry['shortDescription'] = html.escape(text[:200])
     elif not entry.get('fullDescriptionUrl') and not entry.get('shortDescription'):
@@ -53,6 +62,8 @@ def add_description(entry, output):
         if isinstance(description, str) and description.strip():
             entry['shortDescription'] = html.escape(description.strip())
         else:
+            if ipk_path:
+                raise ValueError('missing description for ' + ipk_path.name + '; create ' + str(ipk_path.with_suffix('.md')))
             raise ValueError('missing description for ' + app_id + '; create descriptions/' + app_id + '.html')
 
 
@@ -176,6 +187,14 @@ def build(output):
             raise ValueError('multiple IPKs for ' + app_id + '; keep only the desired version')
         ids.add(app_id)
         metadata = overrides.get(app_id, {})
+        sidecar = path.with_suffix('.json')
+        if sidecar.exists():
+            extra = json.loads(sidecar.read_text(encoding='utf-8'))
+            if not isinstance(extra, dict):
+                raise ValueError('expected JSON object in ' + str(sidecar))
+            metadata = dict(metadata, **extra)
+        if 'rootRequired' in metadata and not isinstance(metadata['rootRequired'], bool):
+            raise ValueError('rootRequired must be true or false for ' + path.name)
         digest = hashlib.sha256(path.read_bytes()).hexdigest()
         filename = quote(path.name, safe='')
         manifest = {
@@ -204,7 +223,7 @@ def build(output):
                  'manifest': manifest, 'pool': 'main', 'shortDescription': description}
         if icon is not None:
             entry['iconUri'] = manifest['iconUri']
-        add_description(entry, output)
+        add_description(entry, output, path)
         packages.append(entry)
         shutil.copyfile(path, output / 'packages' / path.name)
         checksums.append(digest + '  packages/' + path.name)

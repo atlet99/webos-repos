@@ -1,16 +1,23 @@
 .DEFAULT_GOAL := help
 
 PYTHON ?= python3
+VENV := .venv
+VENV_PYTHON := $(VENV)/bin/python
 
 .PHONY: all build check clean help lint test
 
 all: build ## Собрать каталог.
 
-build: ## Собрать сайт и каталог Homebrew Channel в _site/.
-	$(PYTHON) scripts/build.py
+$(VENV)/.ready: requirements.txt
+	$(PYTHON) -m venv $(VENV)
+	$(VENV_PYTHON) -m pip install -r requirements.txt
+	@touch $@
 
-test: ## Запустить тесты генератора.
-	$(PYTHON) -m unittest discover -s tests
+build: $(VENV)/.ready ## Собрать сайт и каталог Homebrew Channel в _site/.
+	$(VENV_PYTHON) scripts/build.py
+
+test: $(VENV)/.ready ## Запустить тесты генератора.
+	$(VENV_PYTHON) -m unittest discover -s tests
 
 lint: ## Проверить Makefile с помощью checkmake.
 	checkmake --config checkmake.ini Makefile

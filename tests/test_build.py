@@ -17,7 +17,7 @@ class BuildTest(unittest.TestCase):
             root = Path(directory)
             (root / 'packages').mkdir()
             (root / 'descriptions').mkdir()
-            (root / 'packages.json').write_text('{"org.example.app": {"rootRequired": true}}')
+            (root / 'packages.json').write_text('{}')
             (root / 'repositories.json').write_text('[]')
             data = root / 'data.tar.gz'
             info = json.dumps({'id': 'org.example.app', 'version': '1.0', 'title': '<App>', 'icon': 'icon.png'}).encode()
@@ -33,9 +33,10 @@ class BuildTest(unittest.TestCase):
             try:
                 output = root / 'output'
                 output.mkdir()
-                with self.assertRaisesRegex(ValueError, 'create descriptions/org.example.app.html'):
+                with self.assertRaisesRegex(ValueError, r'create .*packages/app\.md'):
                     build.build(output)
-                (root / 'descriptions' / 'org.example.app.html').write_text('<p>Тест &amp; описание</p>')
+                (root / 'packages' / 'app.md').write_text('# Тест\n\n[Сайт](https://example.org) и **описание**', encoding='utf-8')
+                (root / 'packages' / 'app.json').write_text('{"rootRequired": true}')
                 output = root / 'successful'
                 output.mkdir()
                 build.build(output)
@@ -45,9 +46,11 @@ class BuildTest(unittest.TestCase):
                 self.assertTrue(manifest['rootRequired'])
                 self.assertEqual((output / 'icons' / 'org.example.app.png').read_bytes(), b'icon')
                 self.assertIn('&lt;App&gt;', (output / 'index.html').read_text())
-                self.assertEqual(entry['shortDescription'], 'Тест &amp; описание')
+                self.assertEqual(entry['shortDescription'], 'Тест Сайт и описание')
                 self.assertTrue(entry['fullDescriptionUrl'].endswith('/descriptions/org.example.app.html'))
-                self.assertEqual((output / 'descriptions' / 'org.example.app.html').read_text(), '<p>Тест &amp; описание</p>')
+                rendered = (output / 'descriptions' / 'org.example.app.html').read_text()
+                self.assertIn('<a href="https://example.org">Сайт</a>', rendered)
+                self.assertIn('<strong>описание</strong>', rendered)
                 (root / 'packages' / 'second.ipk').write_bytes(ipk.read_bytes())
                 other = root / 'other'
                 other.mkdir()
