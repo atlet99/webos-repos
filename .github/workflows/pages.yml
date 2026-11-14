@@ -77,14 +77,11 @@ jobs:
       - name: Build repository
         if: steps.venv.outcome == 'success'
         run: make build
-      - uses: actions/upload-pages-artifact@7b1f4a764d45c48632c6b24a0339c27f5614fb0b # v4.0.0
-        if: steps.venv.outcome == 'success'
-        id: pages
-        with:
-          path: _site
+      # The repository is updated before Pages: a push failure must stop the
+      # deployment instead of publishing packages that git does not have.
       - name: Commit and push refreshed packages
+        id: commit
         if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main' && steps.venv.outcome == 'success'
-        continue-on-error: true
         env:
           BOT_NAME: github-actions[bot]
           BOT_EMAIL: 41898282+github-actions[bot]@users.noreply.github.com
@@ -110,7 +107,13 @@ jobs:
             echo "push rejected, rebasing onto main (attempt $attempt)"
             git pull --rebase --autostash origin main
           done
-          echo "::warning::could not push refreshed packages, will retry on the next run"
+          echo "::error::could not push refreshed packages, check the rebase above"
+          exit 1
+      - uses: actions/upload-pages-artifact@7b1f4a764d45c48632c6b24a0339c27f5614fb0b # v4.0.0
+        if: steps.venv.outcome == 'success' && steps.commit.outcome != 'failure'
+        id: pages
+        with:
+          path: _site
   deploy:
     if: github.event_name != 'pull_request' && needs.build.outputs.published == 'success'
     timeout-minutes: 10
