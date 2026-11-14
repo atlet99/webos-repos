@@ -4,7 +4,7 @@ PYTHON ?= python3
 VENV := .venv
 VENV_PYTHON := $(VENV)/bin/python
 
-.PHONY: all build check clean freeze help lint python-lint test workflow-lint
+.PHONY: all build check clean freeze help lint python-lint sync test venv workflow-lint
 
 all: build ## Собрать каталог.
 
@@ -13,8 +13,13 @@ $(VENV)/.ready: requirements.txt
 	$(VENV_PYTHON) -m pip install -r requirements.txt
 	@touch $@
 
+venv: $(VENV)/.ready ## Создать .venv и поставить зависимости.
+
 build: $(VENV)/.ready ## Собрать сайт и каталог Homebrew Channel в _site/.
 	$(VENV_PYTHON) scripts/build.py
+
+sync: $(VENV)/.ready ## Скачать свежие сторонние IPK из remote-packages.json.
+	$(VENV_PYTHON) scripts/sync_remote.py
 
 test: $(VENV)/.ready ## Запустить тесты генератора.
 	$(VENV_PYTHON) -m unittest discover -s tests
